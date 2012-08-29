@@ -18,8 +18,6 @@ module FRP.Euphoria.Network
 --------------------------------------------------------------------------------
 import           Control.Applicative           (pure, (<$>), (<*>))
 import           Control.Concurrent            (forkIO)
-import           Control.Concurrent.Chan
-import           Control.Monad                 (forever)
 import           Data.ByteString               (ByteString)
 import           Data.IORef
 import           Data.Map                      (Map)
@@ -43,8 +41,8 @@ data Decoder = forall a. Decoder (Serialize.Get a)
 
 --------------------------------------------------------------------------------
 data Receiver = Receiver
-    { receiverDispatch :: Dispatch
-    , receiverChan     :: Chan ByteString
+    { receiverReader   :: IO (Maybe ByteString)
+    , receiverDispatch :: Dispatch
     , receiverDecoders :: IORef (Map BeamType Decoder)
       -- TODO          : sequence numbers, ...
       -- TODO: More efficient type like hashmap or...
@@ -53,29 +51,35 @@ data Receiver = Receiver
 
 
 --------------------------------------------------------------------------------
-mkReceiver :: Chan ByteString -> IO Receiver
-mkReceiver chan = do
-    rcv <- Receiver <$> mkDispatch <*> pure chan <*> newIORef M.empty
+mkReceiver :: IO (Maybe ByteString)
+           -> IO Receiver
+mkReceiver reader = do
+    rcv <- Receiver <$> pure reader <*> mkDispatch <*> newIORef M.empty
     _   <- forkIO $ receiverLoop rcv
     return rcv
 
 
 --------------------------------------------------------------------------------
 receiverLoop :: Receiver -> IO ()
-receiverLoop rcv = forever $ do
-    putStrLn "Reading from chan..."
-    bs <- readChan $ receiverChan rcv
+receiverLoop rcv = do
+    putStrLn "Reading..."
+    mbs <- receiverReader rcv
+    putStrLn $ "Read: " ++ show mbs
 
-    putStrLn $ "Read: " ++ show bs
-    case Serialize.runGetState Serialize.get bs 0 of
-        Left err        -> error $ "Can't parse beamtype: " ++ err
-        Right (bt, bs') -> do
-            gets <- readIORef $ receiverDecoders rcv
-            case M.lookup bt gets of
-                Nothing            -> putStrLn "No Get for beamtype"
-                Just (Decoder get) -> case Serialize.runGet get bs' of
-                    Left err -> error $ "Can't parse data: " ++ err
-                    Right x  -> dispatchCall (receiverDispatch rcv) bt x
+    case mbs of
+        Nothing -> putStrLn "Reader EOF"
+        Just bs -> do
+            case Serialize.runGetState Serialize.get bs 0 of
+                Left err        -> error $ "Can't parse beamtype: " ++ err
+                Right (bt, bs') -> do
+                    gets <- readIORef $ receiverDecoders rcv
+                    case M.lookup bt gets of
+                        Nothing            -> putStrLn "No Get for beamtype"
+                        Just (Decoder get) -> case Serialize.runGet get bs' of
+                            Left err -> error $ "Can't parse data: " ++ err
+                            Right x  -> dispatchCall (receiverDispatch rcv) bt x
+
+            receiverLoop rcv
 
 
 --------------------------------------------------------------------------------
@@ -94,13 +98,13 @@ receiverExternalEvent rcv = do
 
 --------------------------------------------------------------------------------
 data Sender = Sender
-    { senderChan :: Chan ByteString
+    { senderWriter :: ByteString -> IO ()
     }
 
 
 --------------------------------------------------------------------------------
-mkSender :: Chan ByteString -> IO Sender
-mkSender chan = return $ Sender chan
+mkSender :: (ByteString -> IO ()) -> IO Sender
+mkSender writer = return $ Sender writer
 
 
 --------------------------------------------------------------------------------
@@ -109,12 +113,10 @@ senderSend :: (Serialize a, Typeable a) => Sender -> a -> IO ()
 senderSend s x = do
     let bs = Serialize.encode (beamType x) `mappend` Serialize.encode x
     putStrLn $ "Writing to chan, type: " ++ show (beamType x)
-    writeChan (senderChan s) bs
+    senderWriter s bs
 
 
 --------------------------------------------------------------------------------
 senderEvent :: (Serialize a, Typeable a)
-            => Sender -> Event a -> SignalGen ()
-senderEvent s e = do
-    _ <- effectful1 (mapM_ $ senderSend s) (eventToSignal e )
-    return ()
+            => Sender -> Event a -> SignalGen (Signal ())
+senderEvent s e = effectful1 (mapM_ $ senderSend s) (eventToSignal e )
