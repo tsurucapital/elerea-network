@@ -1,5 +1,5 @@
 --------------------------------------------------------------------------------
-import           Control.Applicative            ((*>))
+import           Control.Applicative            ((<*))
 import           Control.Concurrent             (threadDelay)
 import           Control.Concurrent.Chan
 import           Control.Monad                  (forever, replicateM)
@@ -23,7 +23,7 @@ server host port = do
     sampler <- start $ do
         r <- randomEvent gen
         s <- senderEvent sender r
-        return $ eventToSignal r *> s
+        return $ eventToSignal r -- <* s
 
     forever $ do
         x <- sampler

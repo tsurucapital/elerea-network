@@ -28,6 +28,7 @@ import qualified Data.Serialize                as Serialize
 import           Data.Typeable                 (Typeable)
 import           FRP.Elerea.Simple
 import           FRP.Euphoria.Event
+import           System.Mem.Weak               (addFinalizer)
 
 
 --------------------------------------------------------------------------------
@@ -89,8 +90,11 @@ receiverExternalEvent rcv = do
     putStrLn $ "Registering get for " ++ show bt
     modifyIORef (receiverDecoders rcv) $ M.insert bt (Decoder get)
     (sgen, callback) <- externalEvent
-    dispatchAdd (receiverDispatch rcv) callback
-    return sgen
+    finalizer        <- dispatchAdd (receiverDispatch rcv) callback
+    return $ do
+        ev <- sgen
+        execute $ addFinalizer ev finalizer
+        return ev
   where
     bt  = beamType (undefined :: a)
     get = Serialize.get :: Serialize.Get a
