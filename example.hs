@@ -55,7 +55,7 @@ client host port = do
     forever $ do
         x <- sampler
         putStrLn $ "Client generated sample: " ++ show x
-        threadDelay 1000 -- $ 1000 * 1000
+        threadDelay $ 1000 * 1000
 
 
 --------------------------------------------------------------------------------

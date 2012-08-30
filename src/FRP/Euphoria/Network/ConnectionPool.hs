@@ -12,14 +12,26 @@ module FRP.Euphoria.Network.ConnectionPool
 
 
 --------------------------------------------------------------------------------
+import           Control.Concurrent        (forkIO, threadDelay)
+import           Control.Concurrent.MVar
+import           Control.Monad             (filterM, forever)
 import           Data.ByteString           (ByteString)
+import           Data.Map                  (Map)
+import qualified Data.Map                  as M
+import           Data.Ord                  (comparing)
+import           Data.Time                 (UTCTime, addUTCTime, getCurrentTime)
 import qualified Network.Socket            as S
 import qualified Network.Socket.ByteString as SB
 
 
 --------------------------------------------------------------------------------
 data Peer = Peer S.SockAddr
-    deriving (Show)
+    deriving (Eq, Show)
+
+
+--------------------------------------------------------------------------------
+instance Ord Peer where
+    compare = comparing show
 
 
 --------------------------------------------------------------------------------
@@ -30,7 +42,11 @@ mkPeer host port = do
 
 
 --------------------------------------------------------------------------------
-data ConnectionPool = ConnectionPool S.Socket
+data ConnectionPool = ConnectionPool
+    { poolSocket  :: S.Socket
+    , poolPeers   :: MVar (Map Peer UTCTime)
+    , poolTimeout :: Int
+    }
 
 
 --------------------------------------------------------------------------------
@@ -40,18 +56,52 @@ mkConnectionPool host port = do
     _      <- S.setSocketOption socket S.ReuseAddr 1
     host'  <- S.inet_addr host
     S.bindSocket socket $ S.SockAddrInet (fromIntegral port) host'
-    return $ ConnectionPool socket
+
+    peers <- newMVar M.empty
+
+    let pool = ConnectionPool socket peers 10
+
+    -- TODO: Some way to stop this thread?
+    _ <- forkIO $ connectionCheckDisconnects pool
+
+    return pool
 
 
 --------------------------------------------------------------------------------
 connectionPoolRecv :: ConnectionPool -> IO (Peer, ByteString)
-connectionPoolRecv (ConnectionPool socket) = do
-    (bs, addr) <- SB.recvFrom socket 1024
-    return (Peer addr, bs)
+connectionPoolRecv pool = do
+    (bs, addr) <- SB.recvFrom (poolSocket pool) 1024
+    time       <- getCurrentTime
+    let peer = Peer addr
+
+    modifyMVar_ (poolPeers pool) $ \peers -> do
+        case M.lookup peer peers of
+            Nothing -> putStrLn $ "Connected: " ++ show peer
+            _       -> return ()
+
+        return $ M.insert peer time peers
+
+    return (peer, bs)
 
 
 --------------------------------------------------------------------------------
 connectionPoolSend :: ConnectionPool -> Peer -> ByteString -> IO ()
-connectionPoolSend (ConnectionPool socket) (Peer addr) bs = do
-    _ <- SB.sendTo socket bs addr
+connectionPoolSend pool (Peer addr) bs = do
+    _ <- SB.sendTo (poolSocket pool) bs addr
     return ()
+
+
+--------------------------------------------------------------------------------
+connectionCheckDisconnects :: ConnectionPool -> IO ()
+connectionCheckDisconnects pool = forever $ do
+    threadDelay $ 1000 * 1000
+    now <- getCurrentTime
+
+    modifyMVar_ (poolPeers pool) $
+        fmap M.fromAscList . filterM (check now) . M.toAscList
+  where
+    check now (peer, time)
+        | fromIntegral (poolTimeout pool) `addUTCTime` time > now = return True
+        | otherwise                                               = do
+            putStrLn $ "Disconnected: " ++ show peer
+            return False
