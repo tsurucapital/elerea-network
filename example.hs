@@ -13,13 +13,13 @@ import           System.Random
 --------------------------------------------------------------------------------
 import           FRP.Elerea.Simple
 import           FRP.Euphoria.Network
-import           FRP.Euphoria.Network.Multicast
+import           FRP.Euphoria.Network.Udp
 
 
 --------------------------------------------------------------------------------
 server :: String -> Int -> IO ()
 server host port = do
-    sender <- mkMulticastSender host port
+    sender <- mkUdpSender "0.0.0.0" 123456 host port
     gen    <- newStdGen
 
     sampler <- start $ do
@@ -47,7 +47,7 @@ randomSignal gen = do
 --------------------------------------------------------------------------------
 client :: String -> Int -> IO ()
 client host port = do
-    receiver <- mkMulticastReceiver host port
+    receiver <- mkUdpReceiver host port
     sgen     <- receiveSignal receiver 0
 
     sampler <- start $ average =<< sgen
@@ -55,7 +55,7 @@ client host port = do
     forever $ do
         x <- sampler
         putStrLn $ "Client generated sample: " ++ show x
-        threadDelay $ 1000 * 1000
+        threadDelay 1000 -- $ 1000 * 1000
 
 
 --------------------------------------------------------------------------------
@@ -76,6 +76,6 @@ main :: IO ()
 main = do
     args <- getArgs
     case args of
-        ("server" : _) -> server "239.0.0.1" 12345
-        ("client" : _) -> client "239.0.0.1" 12345
+        ("server" : _) -> server "127.0.0.1" 12345
+        ("client" : _) -> client "127.0.0.1" 12345
         _              -> error "Specify either 'server' or 'client'"
