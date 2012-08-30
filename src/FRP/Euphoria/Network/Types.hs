@@ -8,22 +8,35 @@ module FRP.Euphoria.Network.Types
 
 
 --------------------------------------------------------------------------------
-import           Data.ByteString            (ByteString)
-import qualified Data.ByteString            as B
-import qualified Data.ByteString.Lazy       as BL
+import           Control.Applicative        ((<$>), (<*>))
+import           Data.Bits                  (shiftR)
 import qualified Data.ByteString.Lazy.Char8 as BLC
-import           Data.Digest.Pure.SHA       (bytestringDigest, sha1)
-import           Data.Serialize             (Serialize)
+import           Data.Digest.Pure.SHA       (integerDigest, sha1)
+import           Data.Serialize             (Serialize (..))
+import qualified Data.Serialize             as Serialize
 import           Data.Typeable              (Typeable, showsTypeRep, typeOf)
+import           Data.Word                  (Word64)
 
 
 --------------------------------------------------------------------------------
-newtype BeamType = BeamType ByteString
-    deriving (Eq, Ord, Serialize, Show, Typeable)
+data BeamType = BeamType {-# UNPACK #-} !Word64 {-# UNPACK #-} !Word64
+    deriving (Eq, Ord, Show, Typeable)
 
 
 --------------------------------------------------------------------------------
+instance Serialize BeamType where
+    get                  =
+        BeamType <$> Serialize.getWord64be <*> Serialize.getWord64be
+    put (BeamType w1 w2) =
+        Serialize.putWord64be w1 >> Serialize.putWord64be w2
+
+
+--------------------------------------------------------------------------------
+-- | Determine a strict 128-bit hash
 beamType :: Typeable a => a -> BeamType
-beamType x = BeamType $ sha1' $ showsTypeRep (typeOf x) ""
+beamType x = BeamType w1 w2
   where
-    sha1' = B.concat . BL.toChunks . bytestringDigest . sha1 . BLC.pack
+    digest  = sha1 $ BLC.pack $ showsTypeRep (typeOf x) ""
+    integer = integerDigest digest
+    w1      = fromInteger $ integer `shiftR` 64
+    w2      = fromInteger integer
