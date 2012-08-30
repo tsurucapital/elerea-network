@@ -32,7 +32,6 @@ Library
     cereal            >= 0.3   && < 0.4,
     containers        >= 0.4   && < 0.5,
     elerea            >= 2.7   && < 2.8,
-    euphoria          >= 0.4   && < 5,
     network           >= 2.3   && < 2.4,
     network-multicast >= 0.0.6 && < 0.1,
     SHA               >= 1.5   && < 1.6

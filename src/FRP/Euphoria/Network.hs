@@ -7,32 +7,35 @@ module FRP.Euphoria.Network
 
     , Receiver
     , mkReceiver
-    , receiverExternalEvent
+    , receiveSignal
 
     , Sender
     , mkSender
-    , senderEvent
+    , sendSignal
     ) where
 
 
 --------------------------------------------------------------------------------
-import           Control.Applicative           (pure, (<$>), (<*>))
-import           Control.Concurrent            (forkIO)
-import           Data.ByteString               (ByteString)
+import           Control.Applicative        (pure, (<$>), (<*>))
+import           Control.Concurrent         (forkIO)
+import           Data.ByteString            (ByteString)
 import           Data.IORef
-import           Data.Map                      (Map)
-import qualified Data.Map                      as M
-import           Data.Monoid                   (mappend)
-import           Data.Serialize                (Serialize)
-import qualified Data.Serialize                as Serialize
-import           Data.Typeable                 (Typeable)
+import           Data.Map                   (Map)
+import qualified Data.Map                   as M
+import           Data.Monoid                (mappend)
+import           Data.Serialize             (Serialize)
+import qualified Data.Serialize             as Serialize
+import           Data.Typeable              (Typeable)
 import           FRP.Elerea.Simple
-import           FRP.Euphoria.Event
+import           Unsafe.Coerce              (unsafeCoerce)
 
 
 --------------------------------------------------------------------------------
-import           FRP.Euphoria.Network.Dispatch
 import           FRP.Euphoria.Network.Types
+
+
+--------------------------------------------------------------------------------
+data Anything = forall a. Anything a
 
 
 --------------------------------------------------------------------------------
@@ -42,8 +45,8 @@ data Decoder = forall a. Decoder (Serialize.Get a)
 --------------------------------------------------------------------------------
 data Receiver = Receiver
     { receiverReader   :: IO (Maybe ByteString)
-    , receiverDispatch :: Dispatch
     , receiverDecoders :: IORef (Map BeamType Decoder)
+    , receiverSignals  :: IORef (Map BeamType Anything)
       -- TODO          : sequence numbers, ...
       -- TODO: More efficient type like hashmap or...
       -- TODO: unregister callbacks using finalizers
@@ -54,8 +57,11 @@ data Receiver = Receiver
 mkReceiver :: IO (Maybe ByteString)
            -> IO Receiver
 mkReceiver reader = do
-    rcv <- Receiver <$> pure reader <*> mkDispatch <*> newIORef M.empty
-    _   <- forkIO $ receiverLoop rcv
+    rcv <- Receiver <$> pure reader
+                    <*> newIORef M.empty
+                    <*> newIORef M.empty
+
+    _ <- forkIO $ receiverLoop rcv
     return rcv
 
 
@@ -77,20 +83,24 @@ receiverLoop rcv = do
                         Nothing            -> putStrLn "No Get for beamtype"
                         Just (Decoder get) -> case Serialize.runGet get bs' of
                             Left err -> error $ "Can't parse data: " ++ err
-                            Right x  -> dispatchCall (receiverDispatch rcv) bt x
+                            Right x  -> modifyIORef (receiverSignals rcv) $
+                                M.insert bt (Anything x)
 
             receiverLoop rcv
 
 
 --------------------------------------------------------------------------------
-receiverExternalEvent :: forall a. (Serialize a, Typeable a)
-                      => Receiver -> IO (SignalGen (Event a))
-receiverExternalEvent rcv = do
+receiveSignal :: forall a. (Serialize a, Typeable a)
+              => Receiver -> a -> IO (SignalGen (Signal a))
+receiveSignal rcv initial = do
     putStrLn $ "Registering get for " ++ show bt
     modifyIORef (receiverDecoders rcv) $ M.insert bt (Decoder get)
-    (sgen, callback) <- externalEvent
-    dispatchAdd (receiverDispatch rcv) callback
-    return sgen
+    modifyIORef (receiverSignals rcv)  $ M.insert bt (Anything initial)
+    return $ effectful $ do
+        map' <- readIORef (receiverSignals rcv)
+        case M.lookup bt map' of
+            Just (Anything x) -> return (unsafeCoerce x)
+            Nothing           -> error "Receiver internal error"
   where
     bt  = beamType (undefined :: a)
     get = Serialize.get :: Serialize.Get a
@@ -117,6 +127,6 @@ senderSend s x = do
 
 
 --------------------------------------------------------------------------------
-senderEvent :: (Serialize a, Typeable a)
-            => Sender -> Event a -> SignalGen (Signal ())
-senderEvent s e = effectful1 (mapM_ $ senderSend s) (eventToSignal e )
+sendSignal :: (Serialize a, Typeable a)
+           => Sender -> Signal a -> SignalGen (Signal ())
+sendSignal s signal = effectful1 (senderSend s) signal
