@@ -48,7 +48,7 @@ randomSignal gen = do
 client :: String -> Int -> IO ()
 client host port = do
     receiver <- mkUdpReceiver host port
-    sgen     <- receiveSignal receiver 0
+    sgen     <- receiveSignal receiver 0 const
 
     sampler <- start $ average =<< sgen
 
