@@ -3,7 +3,7 @@
 
 
 --------------------------------------------------------------------------------
-import           Control.Applicative            ((<$>), (<*>), (<*))
+import           Control.Applicative            (pure, (<$>), (<*>), (<*))
 import           Control.Concurrent             (threadDelay)
 import           Control.Monad                  (forever)
 import           System.Environment             (getArgs)
@@ -13,18 +13,19 @@ import           System.Random
 --------------------------------------------------------------------------------
 import           FRP.Elerea.Simple
 import           FRP.Euphoria.Network
-import           FRP.Euphoria.Network.Udp
+import           FRP.Euphoria.Network.UdpPool
 
 
 --------------------------------------------------------------------------------
 server :: String -> Int -> IO ()
 server host port = do
-    sender <- mkUdpSender "0.0.0.0" 123456 host port
+    sender <- mkNetwork "0.0.0.0" 123456
     gen    <- newStdGen
+    peer   <- mkPeer host port
 
     sampler <- start $ do
         r <- randomSignal gen
-        s <- sendSignal sender 0 (+) r
+        s <- networkSend sender 0 (+) r (pure peer)
         return s
 
     forever $ do
@@ -47,10 +48,8 @@ randomSignal gen = do
 --------------------------------------------------------------------------------
 client :: String -> Int -> IO ()
 client host port = do
-    receiver <- mkUdpReceiver host port
-    sgen     <- receiveSignal receiver 0 (+) :: IO (SignalGen (Signal Int))
-    sampler  <- start sgen
-
+    network <- mkNetwork host port
+    sampler <- start $ networkReceive network 0 (+) :: IO (IO [(Peer, Int)])
     forever $ do
         x <- sampler
         putStrLn $ "Client generated sample: " ++ show x
@@ -76,5 +75,5 @@ main = do
     args <- getArgs
     case args of
         ("server" : _) -> server "127.0.0.1" 12345
-        ("client" : _) -> client "127.0.0.1" 12345
+        ("client" : _) -> client "0.0.0.0" 12345
         _              -> error "Specify either 'server' or 'client'"

@@ -1,14 +1,15 @@
 ---------------------------------------------------------------------------------
 -- | Simple abstraction layer above UDP
-module FRP.Euphoria.Network.ConnectionPool
+module FRP.Euphoria.Network.UdpPool
     ( Peer
     , mkPeer
 
-    , ConnectionPool
-    , mkConnectionPool
-    , connectionPoolRecv
-    , connectionPoolSend
-    , connectionPoolPeers
+    , UdpPool
+    , mkUdpPool
+    , udpPoolRecv
+    , udpPoolSend
+    , udpPoolPeers
+    , udpPoolSetHandlers
     ) where
 
 
@@ -43,7 +44,7 @@ mkPeer host port = do
 
 
 --------------------------------------------------------------------------------
-data ConnectionPool = ConnectionPool
+data UdpPool = UdpPool
     { poolSocket            :: S.Socket
     , poolPeers             :: MVar (Map Peer UTCTime)
     , poolTimeout           :: Int
@@ -53,11 +54,8 @@ data ConnectionPool = ConnectionPool
 
 
 --------------------------------------------------------------------------------
-mkConnectionPool :: String -> Int
-                 -> (Peer -> IO ())
-                 -> (Peer -> IO ())
-                 -> IO ConnectionPool
-mkConnectionPool host port connect disconnect = do
+mkUdpPool :: String -> Int -> IO UdpPool
+mkUdpPool host port = do
     socket <- S.socket S.AF_INET S.Datagram S.defaultProtocol
     _      <- S.setSocketOption socket S.ReuseAddr 1
     host'  <- S.inet_addr host
@@ -65,17 +63,19 @@ mkConnectionPool host port connect disconnect = do
 
     peers <- newMVar M.empty
 
-    let pool = ConnectionPool socket peers 10 connect disconnect
+    let pool = UdpPool socket peers 10 nullHandler nullHandler
 
     -- TODO: Some way to stop this thread?
-    _ <- forkIO $ connectionCheckDisconnects pool
+    _ <- forkIO $ udpCheckDisconnects pool
 
     return pool
+  where
+    nullHandler _ = return ()
 
 
 --------------------------------------------------------------------------------
-connectionPoolRecv :: ConnectionPool -> IO (Peer, ByteString)
-connectionPoolRecv pool = do
+udpPoolRecv :: UdpPool -> IO (Peer, ByteString)
+udpPoolRecv pool = do
     (bs, addr) <- SB.recvFrom (poolSocket pool) 1024
     time       <- getCurrentTime
     let peer = Peer addr
@@ -91,15 +91,15 @@ connectionPoolRecv pool = do
 
 
 --------------------------------------------------------------------------------
-connectionPoolSend :: ConnectionPool -> Peer -> ByteString -> IO ()
-connectionPoolSend pool (Peer addr) bs = do
+udpPoolSend :: UdpPool -> Peer -> ByteString -> IO ()
+udpPoolSend pool (Peer addr) bs = do
     _ <- SB.sendTo (poolSocket pool) bs addr
     return ()
 
 
 --------------------------------------------------------------------------------
-connectionCheckDisconnects :: ConnectionPool -> IO ()
-connectionCheckDisconnects pool = forever $ do
+udpCheckDisconnects :: UdpPool -> IO ()
+udpCheckDisconnects pool = forever $ do
     threadDelay $ 1000 * 1000
     now <- getCurrentTime
 
@@ -115,5 +115,14 @@ connectionCheckDisconnects pool = forever $ do
 
 --------------------------------------------------------------------------------
 -- | List of connected peers
-connectionPoolPeers :: ConnectionPool -> IO [Peer]
-connectionPoolPeers = fmap M.keys . readMVar . poolPeers
+udpPoolPeers :: UdpPool -> IO [Peer]
+udpPoolPeers = fmap M.keys . readMVar . poolPeers
+
+
+--------------------------------------------------------------------------------
+-- | Set new connect/disconnect handlers
+udpPoolSetHandlers :: (Peer -> IO ()) -> (Peer -> IO ()) -> UdpPool -> UdpPool
+udpPoolSetHandlers connect disconnect pool = pool
+    { poolConnectHandler    = connect
+    , poolDisconnectHandler = disconnect
+    }

@@ -3,24 +3,20 @@
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
 module FRP.Euphoria.Network
-    ( Receiver
-    , mkReceiver
-    , receiveSignal
-
-    , Sender
-    , mkSender
-    , sendSignal
+    ( Network
+    , mkNetwork
+    , networkPeers
+    , networkReceive
+    , networkSend
     ) where
 
 
 --------------------------------------------------------------------------------
-import           Control.Applicative              (pure, (<$>), (<*>))
-import           Control.Concurrent               (forkIO)
-import           Data.ByteString                  (ByteString)
+import           Control.Monad                    (forM)
 import           Data.IORef
+import Control.Concurrent (forkIO)
 import           Data.Map                         (Map)
 import qualified Data.Map                         as M
-import           Data.Maybe                       (fromMaybe)
 import           Data.Serialize                   (Serialize)
 import qualified Data.Serialize                   as Serialize
 import           Data.Typeable                    (Typeable)
@@ -29,131 +25,101 @@ import           Unsafe.Coerce                    (unsafeCoerce)
 
 
 --------------------------------------------------------------------------------
+import           FRP.Euphoria.Network.Connection
 import           FRP.Euphoria.Network.Incremental
 import           FRP.Euphoria.Network.Packet
 import           FRP.Euphoria.Network.Tag
+import           FRP.Euphoria.Network.UdpPool
 
 
 --------------------------------------------------------------------------------
-data Anything = forall a. Anything a
-
-
---------------------------------------------------------------------------------
-data Receiver = Receiver
-    { receiverReader  :: IO (Maybe ByteString)
-    , receiverSignals :: IORef (Map Tag Anything)
-    , receiverPackets :: IORef (Map Tag [Packet])
-      -- TODO          : sequence numbers, ...
-      -- TODO: More efficient type like hashmap or...
-      -- TODO: unregister callbacks using finalizers
+data Network = Network
+    { networkUdpPool     :: UdpPool
+    , networkConnections :: IORef (Map Peer Connection)
     }
 
 
 --------------------------------------------------------------------------------
-mkReceiver :: IO (Maybe ByteString)
-           -> IO Receiver
-mkReceiver reader = do
-    rcv <- Receiver <$> pure reader <*> newIORef M.empty <*> newIORef M.empty
-    _   <- forkIO $ receiverLoop rcv
-    return rcv
+mkNetwork :: String -> Int -> IO Network
+mkNetwork host port = do
+    pool        <- mkUdpPool host port
+    connections <- newIORef M.empty
+
+    let pool'   = udpPoolSetHandlers (connect network) (disconnect network) pool
+        network = Network pool' connections
+
+    _ <- forkIO $ receiveLoop network
+    return network
 
 
 --------------------------------------------------------------------------------
-receiverLoop :: Receiver -> IO ()
-receiverLoop rcv = do
+receiveLoop :: Network -> IO ()
+receiveLoop nw = do
     putStrLn "Reading..."
-    mbs <- receiverReader rcv
-    putStrLn $ "Read: " ++ show mbs
+    (peer, bs) <- udpPoolRecv $ networkUdpPool nw
+    putStrLn $ "[" ++ show peer ++ "]: " ++ show bs
 
-    case mbs of
-        Nothing -> putStrLn "Reader EOF"
-        Just bs -> do
-            case Serialize.decode bs of
-                Left err     -> error $ "Can't parse packet: " ++ err
-                Right packet ->
-                    atomicModifyIORef_ (receiverPackets rcv) $
-                        M.insertWith (++) (packetChannel packet) [packet]
+    case Serialize.decode bs of
+        Left err     -> error $ "Can't parse packet: " ++ err
+        Right packet -> do
+            conns <- readIORef (networkConnections nw)
+            case M.lookup peer conns of
+                Nothing   -> error "Unknown peer!"  -- Should not happen
+                Just conn -> connectionQueue conn packet
 
-            receiverLoop rcv
+    receiveLoop nw
 
 
 --------------------------------------------------------------------------------
-receiveSignal :: forall a d. (Serialize a, Serialize d, Typeable a, Typeable d)
-              => Receiver
-              -> a
-              -> (d -> a -> a)
-              -> IO (SignalGen (Signal a))
-receiveSignal rcv initial update = do
-    putStrLn $ "Registering get for " ++ show tag
-    atomicModifyIORef_ (receiverSignals rcv)  $ M.insert tag (Anything initial)
+networkPeers :: Network -> SignalGen (Signal [Peer])
+networkPeers = effectful . udpPoolPeers . networkUdpPool
 
-    return $ effectful $ do
-        packets <- atomicModifyIORef (receiverPackets rcv) $ \m ->
-            let packets = fromMaybe [] $ M.lookup tag m
-            in (M.delete tag m, packets)
 
-        state <- atomicModifyIORef (receiverSignals rcv) $ \m ->
-            let s  = case m M.! tag of Anything x -> unsafeCoerce x
-                s' = foldr (incremental update) s packets
-                m' = M.insert tag (Anything s') m
-            in (m', s')
-
-        return state
+--------------------------------------------------------------------------------
+networkReceive
+    :: forall a d. (Serialize a, Serialize d, Typeable a, Typeable d)
+    => Network
+    -> a
+    -> (d -> a -> a)
+    -> SignalGen (Signal [(Peer, a)])
+networkReceive nw initial update = effectful flushAll
   where
-    tag = typeTag (undefined :: a)  -- Todo: make this a tuple of (a, d)
+    flushAll = do
+        conns <- readIORef (networkConnections nw)
+        forM (M.toList conns) $ \(peer, conn) -> do
+            x <- connectionFlush conn initial update
+            return (peer, x)
 
 
 --------------------------------------------------------------------------------
-data Sender = Sender
-    { senderWriter  :: ByteString -> IO ()
-    , senderSignals :: IORef (Map Tag Anything)
-    }
-
-
---------------------------------------------------------------------------------
-mkSender :: (ByteString -> IO ()) -> IO Sender
-mkSender writer = Sender <$> pure writer <*> newIORef M.empty
-
-
---------------------------------------------------------------------------------
--- TODO: Modify to work on [a]?
-senderSend :: Sender -> Packet -> IO ()
-senderSend s packet = do
-    putStrLn $ "Writing to chan: " ++ show (packetChannel packet)
-    senderWriter s (Serialize.encode packet)
-
-
---------------------------------------------------------------------------------
-sendSignal :: (Serialize a, Serialize d, Typeable a, Typeable d)
-           => Sender
+networkSend :: (Serialize a, Serialize d, Typeable a, Typeable d)
+           => Network
            -> a
            -> (d -> a -> a)
            -> Signal d
+           -> Signal Peer
            -> SignalGen (Signal a)
-sendSignal sender initial update delta = do
-    execute $ atomicModifyIORef_ (senderSignals sender) $
-        M.insert tag (Anything initial)
-
-    effectful1 update' delta
+networkSend nw initial update deltaS peerS =
+    effectful2 send deltaS peerS
   where
-    tag       = typeTag initial
-    update' d = do
-        state <- atomicModifyIORef (senderSignals sender) $ \m ->
-            let s  = case m M.! tag of Anything x -> unsafeCoerce x
-                s' = update d s
-                m' = M.insert tag (Anything s') m
-            in (m', s')
+    send delta peer = do
+        conns <- readIORef (networkConnections nw)
+        case M.lookup peer conns of
+            Nothing   -> connect nw peer >> send delta peer
+            Just conn -> connectionSend conn initial update delta
 
-        -- (A) Send full state
-        -- senderSend sender $ Packet FullState tag 0 $ Serialize.encode state
-
-        -- (B) Send incremental update
-        senderSend sender $ Packet Delta tag 0 $ Serialize.encode d
-
-        return state
-        
 
 --------------------------------------------------------------------------------
--- | Utility
-atomicModifyIORef_ :: IORef a -> (a -> a) -> IO ()
-atomicModifyIORef_ ref f = atomicModifyIORef ref $ \x -> (f x, ())
+connect :: Network -> Peer -> IO ()
+connect nw peer = do
+    putStrLn $ "Connected: " ++ show peer
+    conn <- mkConnection $ \bs -> udpPoolSend (networkUdpPool nw) peer bs
+    atomicModifyIORef (networkConnections nw) $ \m ->
+        (M.insert peer conn m, ())
+
+
+--------------------------------------------------------------------------------
+disconnect :: Network -> Peer -> IO ()
+disconnect nw peer = do
+    putStrLn $ "Disconnected: " ++ show peer
+    atomicModifyIORef (networkConnections nw) $ \m -> (M.delete peer m, ())
