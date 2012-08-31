@@ -8,6 +8,7 @@ module FRP.Euphoria.Network.ConnectionPool
     , mkConnectionPool
     , connectionPoolRecv
     , connectionPoolSend
+    , connectionPoolPeers
     ) where
 
 
@@ -43,15 +44,20 @@ mkPeer host port = do
 
 --------------------------------------------------------------------------------
 data ConnectionPool = ConnectionPool
-    { poolSocket  :: S.Socket
-    , poolPeers   :: MVar (Map Peer UTCTime)
-    , poolTimeout :: Int
+    { poolSocket            :: S.Socket
+    , poolPeers             :: MVar (Map Peer UTCTime)
+    , poolTimeout           :: Int
+    , poolConnectHandler    :: Peer -> IO ()
+    , poolDisconnectHandler :: Peer -> IO ()
     }
 
 
 --------------------------------------------------------------------------------
-mkConnectionPool :: String -> Int -> IO ConnectionPool
-mkConnectionPool host port = do
+mkConnectionPool :: String -> Int
+                 -> (Peer -> IO ())
+                 -> (Peer -> IO ())
+                 -> IO ConnectionPool
+mkConnectionPool host port connect disconnect = do
     socket <- S.socket S.AF_INET S.Datagram S.defaultProtocol
     _      <- S.setSocketOption socket S.ReuseAddr 1
     host'  <- S.inet_addr host
@@ -59,7 +65,7 @@ mkConnectionPool host port = do
 
     peers <- newMVar M.empty
 
-    let pool = ConnectionPool socket peers 10
+    let pool = ConnectionPool socket peers 10 connect disconnect
 
     -- TODO: Some way to stop this thread?
     _ <- forkIO $ connectionCheckDisconnects pool
@@ -76,7 +82,7 @@ connectionPoolRecv pool = do
 
     modifyMVar_ (poolPeers pool) $ \peers -> do
         case M.lookup peer peers of
-            Nothing -> putStrLn $ "Connected: " ++ show peer
+            Nothing -> poolConnectHandler pool peer
             _       -> return ()
 
         return $ M.insert peer time peers
@@ -103,5 +109,11 @@ connectionCheckDisconnects pool = forever $ do
     check now (peer, time)
         | fromIntegral (poolTimeout pool) `addUTCTime` time > now = return True
         | otherwise                                               = do
-            putStrLn $ "Disconnected: " ++ show peer
+            poolDisconnectHandler pool peer
             return False
+
+
+--------------------------------------------------------------------------------
+-- | List of connected peers
+connectionPoolPeers :: ConnectionPool -> IO [Peer]
+connectionPoolPeers = fmap M.keys . readMVar . poolPeers
