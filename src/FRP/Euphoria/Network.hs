@@ -39,15 +39,10 @@ data Anything = forall a. Anything a
 
 
 --------------------------------------------------------------------------------
-data Decoder = forall a d. Decoder (Serialize.Get a) (Serialize.Get d)
-
-
---------------------------------------------------------------------------------
 data Receiver = Receiver
-    { receiverReader   :: IO (Maybe ByteString)
-    , receiverDecoders :: IORef (Map Tag Decoder)
-    , receiverSignals  :: IORef (Map Tag Anything)
-    , receiverPackets  :: IORef (Map Tag [Packet])
+    { receiverReader  :: IO (Maybe ByteString)
+    , receiverSignals :: IORef (Map Tag Anything)
+    , receiverPackets :: IORef (Map Tag [Packet])
       -- TODO          : sequence numbers, ...
       -- TODO: More efficient type like hashmap or...
       -- TODO: unregister callbacks using finalizers
@@ -58,12 +53,8 @@ data Receiver = Receiver
 mkReceiver :: IO (Maybe ByteString)
            -> IO Receiver
 mkReceiver reader = do
-    rcv <- Receiver <$> pure reader
-                    <*> newIORef M.empty
-                    <*> newIORef M.empty
-                    <*> newIORef M.empty
-
-    _ <- forkIO $ receiverLoop rcv
+    rcv <- Receiver <$> pure reader <*> newIORef M.empty <*> newIORef M.empty
+    _   <- forkIO $ receiverLoop rcv
     return rcv
 
 
@@ -94,9 +85,7 @@ receiveSignal :: forall a d. (Serialize a, Serialize d, Typeable a, Typeable d)
               => Receiver -> a -> (d -> a -> a) -> IO (SignalGen (Signal a))
 receiveSignal rcv initial update = do
     putStrLn $ "Registering get for " ++ show tag
-    modifyIORef (receiverDecoders rcv) $ M.insert tag (Decoder getA getD)
     modifyIORef (receiverSignals rcv)  $ M.insert tag (Anything initial)
-
 
     return $ effectful $ do
         packets <- atomicModifyIORef (receiverPackets rcv) $ \m ->
@@ -111,9 +100,7 @@ receiveSignal rcv initial update = do
 
         return state
   where
-    tag  = typeTag (undefined :: a)  -- Todo: make this a tuple of (a, d)
-    getA = Serialize.get :: Serialize.Get a
-    getD = Serialize.get :: Serialize.Get d
+    tag = typeTag (undefined :: a)  -- Todo: make this a tuple of (a, d)
 
 
 --------------------------------------------------------------------------------
