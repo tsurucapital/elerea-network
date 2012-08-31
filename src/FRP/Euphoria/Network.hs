@@ -76,16 +76,16 @@ receiverLoop rcv = do
 
             receiverLoop rcv
 
-  where
-    atomicModifyIORef_ ref f = atomicModifyIORef ref $ \x -> (f x, ())
-
 
 --------------------------------------------------------------------------------
 receiveSignal :: forall a d. (Serialize a, Serialize d, Typeable a, Typeable d)
-              => Receiver -> a -> (d -> a -> a) -> IO (SignalGen (Signal a))
+              => Receiver
+              -> a
+              -> (d -> a -> a)
+              -> IO (SignalGen (Signal a))
 receiveSignal rcv initial update = do
     putStrLn $ "Registering get for " ++ show tag
-    modifyIORef (receiverSignals rcv)  $ M.insert tag (Anything initial)
+    atomicModifyIORef_ (receiverSignals rcv)  $ M.insert tag (Anything initial)
 
     return $ effectful $ do
         packets <- atomicModifyIORef (receiverPackets rcv) $ \m ->
@@ -93,7 +93,7 @@ receiveSignal rcv initial update = do
             in (M.delete tag m, packets)
 
         state <- atomicModifyIORef (receiverSignals rcv) $ \m ->
-            let s  = case m M.! tag of Anything x -> (unsafeCoerce x)
+            let s  = case m M.! tag of Anything x -> unsafeCoerce x
                 s' = foldr (incremental update) s packets
                 m' = M.insert tag (Anything s') m
             in (m', s')
@@ -105,25 +105,55 @@ receiveSignal rcv initial update = do
 
 --------------------------------------------------------------------------------
 data Sender = Sender
-    { senderWriter :: ByteString -> IO ()
+    { senderWriter  :: ByteString -> IO ()
+    , senderSignals :: IORef (Map Tag Anything)
     }
 
 
 --------------------------------------------------------------------------------
 mkSender :: (ByteString -> IO ()) -> IO Sender
-mkSender writer = return $ Sender writer
+mkSender writer = Sender <$> pure writer <*> newIORef M.empty
 
 
 --------------------------------------------------------------------------------
 -- TODO: Modify to work on [a]?
-senderSend :: (Serialize a, Typeable a) => Sender -> a -> IO ()
-senderSend s x = do
-    let packet = Packet FullState (typeTag x) 0 (Serialize.encode x)
-    putStrLn $ "Writing to chan, type: " ++ show (typeTag x)
+senderSend :: Sender -> Packet -> IO ()
+senderSend s packet = do
+    putStrLn $ "Writing to chan: " ++ show (packetChannel packet)
     senderWriter s (Serialize.encode packet)
 
 
 --------------------------------------------------------------------------------
-sendSignal :: (Serialize a, Typeable a)
-           => Sender -> Signal a -> SignalGen (Signal ())
-sendSignal s signal = effectful1 (senderSend s) signal
+sendSignal :: (Serialize a, Serialize d, Typeable a, Typeable d)
+           => Sender
+           -> a
+           -> (d -> a -> a)
+           -> Signal d
+           -> SignalGen (Signal a)
+sendSignal sender initial update delta = do
+    execute $ atomicModifyIORef_ (senderSignals sender) $
+        M.insert tag (Anything initial)
+
+    effectful1 update' delta
+  where
+    tag       = typeTag initial
+    update' d = do
+        state <- atomicModifyIORef (senderSignals sender) $ \m ->
+            let s  = case m M.! tag of Anything x -> unsafeCoerce x
+                s' = update d s
+                m' = M.insert tag (Anything s') m
+            in (m', s')
+
+        -- (A) Send full state
+        -- senderSend sender $ Packet FullState tag 0 $ Serialize.encode state
+
+        -- (B) Send incremental update
+        senderSend sender $ Packet Delta tag 0 $ Serialize.encode d
+
+        return state
+        
+
+--------------------------------------------------------------------------------
+-- | Utility
+atomicModifyIORef_ :: IORef a -> (a -> a) -> IO ()
+atomicModifyIORef_ ref f = atomicModifyIORef ref $ \x -> (f x, ())
