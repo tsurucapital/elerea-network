@@ -150,10 +150,10 @@ connectionSend sender initial update delta = do
         in (m', s')
 
     -- (A) Send full state
-    -- sendPacket sender $ Packet FullState tag 0 $ Serialize.encode state
+    -- sendPacket sender $ Packet AbsolutePacket tag 0 $ Serialize.encode state
 
     -- (B) Send incremental update
-    sendPacket sender $ Packet Delta tag 0 $ Serialize.encode delta
+    sendPacket sender $ Packet DeltaPacket tag 0 $ Serialize.encode delta
 
     return state
   where

@@ -23,10 +23,10 @@ incremental :: (Serialize a, Serialize d)
             -> a              -- ^ Initial state
             -> a              -- ^ Resulting state
 incremental update packet initial = case packetType packet of
-    Ack       -> initial  -- But this should not happen
-    FullState -> case Serialize.decode (packetData packet) of
+    AckPacket      -> initial  -- But this should not happen
+    AbsolutePacket -> case Serialize.decode (packetData packet) of
         Left  err      -> error err  -- TODO return the initial state?
         Right newstate -> newstate
-    Delta     -> case Serialize.decode (packetData packet) of
+    DeltaPacket    -> case Serialize.decode (packetData packet) of
         Left err    -> error err  -- TODO probably return initial state
         Right delta -> update delta initial

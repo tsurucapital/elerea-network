@@ -9,7 +9,6 @@ module FRP.Euphoria.Network.Packet
 --------------------------------------------------------------------------------
 import           Control.Monad            (guard)
 import           Data.ByteString          (ByteString)
-import qualified Data.ByteString          as B
 import           Data.ByteString.Char8    ()
 import           Data.Serialize           (Serialize (..))
 import qualified Data.Serialize           as Serialize
@@ -22,9 +21,9 @@ import           FRP.Euphoria.Network.Tag
 
 --------------------------------------------------------------------------------
 data PacketType
-    = FullState
-    | Delta
-    | Ack
+    = AbsolutePacket
+    | DeltaPacket
+    | AckPacket
     deriving (Show)
 
 
@@ -33,15 +32,15 @@ instance Serialize PacketType where
     get = do
         bytes <- Serialize.getBytes 4
         case bytes of
-            "FULL" -> return FullState
-            "DELT" -> return Delta
-            "ACK " -> return Ack
+            "ABSL" -> return AbsolutePacket
+            "DELT" -> return DeltaPacket
+            "ACK " -> return AckPacket
             _      -> fail $ "Unknown PacketType: " ++ show bytes
 
 
-    put FullState = Serialize.putByteString "FULL"
-    put Delta     = Serialize.putByteString "DELT"
-    put Ack       = Serialize.putByteString "ACK "
+    put AbsolutePacket = Serialize.putByteString "ABSL"
+    put DeltaPacket    = Serialize.putByteString "DELT"
+    put AckPacket      = Serialize.putByteString "ACK "
 
 
 --------------------------------------------------------------------------------
@@ -61,7 +60,7 @@ instance Serialize Packet where
         type'   <- Serialize.get
         channel <- Serialize.get
         seqNo   <- Serialize.getWord32be
-        len     <- Serialize.getWord32be
+        len     <- Serialize.remaining
         data'   <- Serialize.getBytes (fromIntegral len)
         return $ Packet type' channel seqNo data'
 
@@ -70,5 +69,4 @@ instance Serialize Packet where
         Serialize.put           type'
         Serialize.put           channel
         Serialize.putWord32be   seqNo
-        Serialize.putWord32be   (fromIntegral $ B.length data')
         Serialize.putByteString data'
