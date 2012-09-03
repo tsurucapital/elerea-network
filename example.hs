@@ -25,7 +25,7 @@ server host port = do
 
     sampler <- start $ do
         r <- randomSignal gen
-        s <- networkSend sender 0 (+) r (pure peer)
+        s <- networkBroadcast sender [peer] 0 (+) r
         return s
 
     forever $ do

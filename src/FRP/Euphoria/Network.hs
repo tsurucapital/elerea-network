@@ -1,4 +1,5 @@
 --------------------------------------------------------------------------------
+{-# LANGUAGE DoRec                      #-}
 {-# LANGUAGE ExistentialQuantification  #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE ScopedTypeVariables        #-}
@@ -8,10 +9,12 @@ module FRP.Euphoria.Network
     , networkPeers
     , networkReceive
     , networkSend
+    , networkBroadcast
     ) where
 
 
 --------------------------------------------------------------------------------
+import           Control.Applicative             ((<$>), (<*>), (*>))
 import           Control.Concurrent              (forkIO)
 import           Control.Monad                   (forM, void)
 import           Data.IORef
@@ -25,6 +28,7 @@ import           FRP.Elerea.Simple
 
 --------------------------------------------------------------------------------
 import           FRP.Euphoria.Network.Connection
+import           FRP.Euphoria.Network.Types
 import           FRP.Euphoria.Network.UdpPool
 
 
@@ -73,11 +77,11 @@ networkPeers = effectful . udpPoolPeers . networkUdpPool
 
 --------------------------------------------------------------------------------
 networkReceive
-    :: forall a d. (Serialize a, Serialize d, Typeable a, Typeable d)
+    :: forall s d. (Serialize s, Serialize d, Typeable s, Typeable d)
     => Network
-    -> a
-    -> (d -> a -> a)
-    -> SignalGen (Signal [(Peer, a)])
+    -> s
+    -> (d -> s -> s)
+    -> SignalGen (Signal [(Peer, s)])
 networkReceive nw initial update = effectful flushAll
   where
     flushAll = do
@@ -88,20 +92,39 @@ networkReceive nw initial update = effectful flushAll
 
 
 --------------------------------------------------------------------------------
-networkSend :: (Serialize a, Serialize d, Typeable a, Typeable d)
-           => Network
-           -> a
-           -> (d -> a -> a)
-           -> Signal [(Peer, d)]
-           -> SignalGen (Signal [(Peer, a)])
-networkSend nw initial update peerS = effectful1 send peerS
+networkSend :: (Serialize s, Serialize d, Typeable s, Typeable d)
+            => Network
+            -> Signal [(Peer, Update s d)]
+            -> SignalGen (Signal [(Peer, s)])
+networkSend nw peerS = effectful1 send peerS
   where
     send peers = do
         conns <- readIORef (networkConnections nw)
-        forM peers $ \(peer, delta) -> do
+        forM peers $ \(peer, update) -> do
             conn  <- maybe (connect nw peer) return $ M.lookup peer conns
-            state <- connectionSend conn initial update delta
+            state <- connectionSend conn update
             return (peer, state)
+
+
+--------------------------------------------------------------------------------
+networkBroadcast
+    :: forall s d. (Serialize s, Serialize d, Typeable s, Typeable d)
+    => Network
+    -> [Peer]
+    -> s
+    -> (d -> s -> s)
+    -> Signal d
+    -> SignalGen (Signal s)
+networkBroadcast nw peers initial update deltaS = do
+    rec
+        updates <- delay (Absolute initial) updates'
+        let updates' = update' <$> deltaS <*> updates
+
+    out <- networkSend nw $ zip peers . repeat <$> updates 
+    return $ out *> fmap updateState updates
+  where
+    update' :: d -> Update s d -> Update s d
+    update' d = Delta d . update d . updateState
 
 
 --------------------------------------------------------------------------------
