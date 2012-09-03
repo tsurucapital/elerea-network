@@ -12,23 +12,19 @@ module FRP.Euphoria.Network
 
 
 --------------------------------------------------------------------------------
-import           Control.Monad                    (forM)
+import           Control.Concurrent              (forkIO)
+import           Control.Monad                   (forM, void)
 import           Data.IORef
-import Control.Concurrent (forkIO)
-import           Data.Map                         (Map)
-import qualified Data.Map                         as M
-import           Data.Serialize                   (Serialize)
-import qualified Data.Serialize                   as Serialize
-import           Data.Typeable                    (Typeable)
+import           Data.Map                        (Map)
+import qualified Data.Map                        as M
+import           Data.Serialize                  (Serialize)
+import qualified Data.Serialize                  as Serialize
+import           Data.Typeable                   (Typeable)
 import           FRP.Elerea.Simple
-import           Unsafe.Coerce                    (unsafeCoerce)
 
 
 --------------------------------------------------------------------------------
 import           FRP.Euphoria.Network.Connection
-import           FRP.Euphoria.Network.Incremental
-import           FRP.Euphoria.Network.Packet
-import           FRP.Euphoria.Network.Tag
 import           FRP.Euphoria.Network.UdpPool
 
 
@@ -45,11 +41,11 @@ mkNetwork host port = do
     pool        <- mkUdpPool host port
     connections <- newIORef M.empty
 
-    let pool'   = udpPoolSetHandlers (connect network) (disconnect network) pool
-        network = Network pool' connections
+    let pool' = udpPoolSetHandlers (connect_ nw) (disconnect nw) pool
+        nw    = Network pool' connections
 
-    _ <- forkIO $ receiveLoop network
-    return network
+    _ <- forkIO $ receiveLoop nw
+    return nw
 
 
 --------------------------------------------------------------------------------
@@ -96,26 +92,31 @@ networkSend :: (Serialize a, Serialize d, Typeable a, Typeable d)
            => Network
            -> a
            -> (d -> a -> a)
-           -> Signal d
-           -> Signal Peer
-           -> SignalGen (Signal a)
-networkSend nw initial update deltaS peerS =
-    effectful2 send deltaS peerS
+           -> Signal [(Peer, d)]
+           -> SignalGen (Signal [(Peer, a)])
+networkSend nw initial update peerS = effectful1 send peerS
   where
-    send delta peer = do
+    send peers = do
         conns <- readIORef (networkConnections nw)
-        case M.lookup peer conns of
-            Nothing   -> connect nw peer >> send delta peer
-            Just conn -> connectionSend conn initial update delta
+        forM peers $ \(peer, delta) -> do
+            conn  <- maybe (connect nw peer) return $ M.lookup peer conns
+            state <- connectionSend conn initial update delta
+            return (peer, state)
 
 
 --------------------------------------------------------------------------------
-connect :: Network -> Peer -> IO ()
+connect :: Network -> Peer -> IO Connection
 connect nw peer = do
     putStrLn $ "Connected: " ++ show peer
     conn <- mkConnection $ \bs -> udpPoolSend (networkUdpPool nw) peer bs
     atomicModifyIORef (networkConnections nw) $ \m ->
         (M.insert peer conn m, ())
+    return conn
+
+
+--------------------------------------------------------------------------------
+connect_ :: Network -> Peer -> IO ()
+connect_ nw = void . connect nw
 
 
 --------------------------------------------------------------------------------
