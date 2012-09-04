@@ -3,20 +3,20 @@
 module FRP.Euphoria.Network.Packet
     ( PacketType (..)
     , Packet (..)
+    , parsePacket
+    , buildPacket
     ) where
 
 
 --------------------------------------------------------------------------------
-import           Control.Monad            (guard)
+import           Blaze.ByteString.Builder (Builder)
+import qualified Blaze.ByteString.Builder as Builder
+import           Control.Applicative      ((<$>))
+import qualified Data.Attoparsec          as A
+import           Data.Bits                (shiftL, (.|.))
 import           Data.ByteString          (ByteString)
-import           Data.ByteString.Char8    ()
-import           Data.Serialize           (Serialize (..))
-import qualified Data.Serialize           as Serialize
-import           Data.Word                (Word32)
-
-
---------------------------------------------------------------------------------
-import           FRP.Euphoria.Network.Tag
+import qualified Data.ByteString          as B
+import           Data.Monoid              (mappend)
 
 
 --------------------------------------------------------------------------------
@@ -28,45 +28,58 @@ data PacketType
 
 
 --------------------------------------------------------------------------------
-instance Serialize PacketType where
-    get = do
-        bytes <- Serialize.getBytes 4
-        case bytes of
-            "ABSL" -> return AbsolutePacket
-            "DELT" -> return DeltaPacket
-            "ACK " -> return AckPacket
-            _      -> fail $ "Unknown PacketType: " ++ show bytes
+parsePacketType :: A.Parser PacketType
+parsePacketType = do
+    bytes <- A.take 4
+    case bytes of
+        "ABSL" -> return AbsolutePacket
+        "DELT" -> return DeltaPacket
+        "ACK " -> return AckPacket
+        _      -> fail $ "Unknown PacketType: " ++ show bytes
 
 
-    put AbsolutePacket = Serialize.putByteString "ABSL"
-    put DeltaPacket    = Serialize.putByteString "DELT"
-    put AckPacket      = Serialize.putByteString "ACK "
+--------------------------------------------------------------------------------
+buildPacketType :: PacketType -> Builder
+buildPacketType AbsolutePacket = Builder.fromByteString "ABSL"
+buildPacketType DeltaPacket    = Builder.fromByteString "DELT"
+buildPacketType AckPacket      = Builder.fromByteString "ACK "
 
 
 --------------------------------------------------------------------------------
 data Packet = Packet
-    { packetType    :: PacketType
-    , packetChannel :: Tag
-    , packetSeqNo   :: Word32
-    , packetData    :: ByteString
+    { packetType :: PacketType
+    , packetData :: ByteString
     } deriving (Show)
 
 
 --------------------------------------------------------------------------------
-instance Serialize Packet where
-    get = do
-        check   <- Serialize.getBytes 8
-        guard (check == "EUPHORIA")
-        type'   <- Serialize.get
-        channel <- Serialize.get
-        seqNo   <- Serialize.getWord32be
-        len     <- Serialize.remaining
-        data'   <- Serialize.getBytes (fromIntegral len)
-        return $ Packet type' channel seqNo data'
+-- | TODO: Some nice trick to encode the length compactly
+parseLength :: A.Parser Int
+parseLength = do
+    b1 <- fromIntegral <$> A.anyWord8
+    b2 <- fromIntegral <$> A.anyWord8
+    b3 <- fromIntegral <$> A.anyWord8
+    b4 <- fromIntegral <$> A.anyWord8
+    return $ (b1 `shiftL` 24) .|. (b2 `shiftL` 16) .|. (b3 `shiftL` 8) .|. b4
 
-    put (Packet type' channel seqNo data') = do
-        Serialize.putByteString "EUPHORIA"
-        Serialize.put           type'
-        Serialize.put           channel
-        Serialize.putWord32be   seqNo
-        Serialize.putByteString data'
+
+--------------------------------------------------------------------------------
+buildLength :: Int -> Builder
+buildLength = Builder.fromWord32be . fromIntegral
+
+
+--------------------------------------------------------------------------------
+parsePacket :: A.Parser Packet
+parsePacket = do
+    type' <- parsePacketType
+    len   <- parseLength
+    data' <- A.take len
+    return $ Packet type' data'
+
+
+--------------------------------------------------------------------------------
+buildPacket :: Packet -> Builder
+buildPacket (Packet type' data') =
+    buildPacketType type'        `mappend`
+    buildLength (B.length data') `mappend`
+    Builder.fromByteString data'
