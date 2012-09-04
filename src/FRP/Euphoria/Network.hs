@@ -60,7 +60,7 @@ server host port initialOut deltasOut = do
         return $ out *> clients
   where
     onConnect c = do
-        putStrLn $ show c ++ " disconnected"
+        putStrLn $ show c ++ " connected"
         clientSend c $ Packet AbsolutePacket (Serialize.encode initialOut)
 
     onDisconnect c = putStrLn $ show c ++ " disconnected"

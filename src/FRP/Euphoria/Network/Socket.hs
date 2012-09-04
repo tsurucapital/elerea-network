@@ -86,8 +86,9 @@ clientDisconnect client = S.sClose (clientSocket client)
 
 --------------------------------------------------------------------------------
 clientSend :: Client -> Packet -> IO ()
-clientSend client packet = SBL.sendAll (clientSocket client) $
-    Builder.toLazyByteString $ buildPacket packet
+clientSend client packet = handle ignoreExceptions $
+    SBL.sendAll (clientSocket client) $
+        Builder.toLazyByteString $ buildPacket packet
 
 
 --------------------------------------------------------------------------------
@@ -143,16 +144,12 @@ runServer host port onConnect onDisconnect onPacket = do
         _         <- forkIO $ do
             client <- serverAddClient server conn
             onConnect client
-            handle handler $ readLoop client onPacket
+            handle ignoreExceptions $ readLoop client onPacket
             serverRemoveClient server client
             onDisconnect client
         return ()
 
     return server
-  where
-    -- Ignore All Exceptions (TM)
-    handler :: SomeException -> IO ()
-    handler _ = return ()
 
 
 --------------------------------------------------------------------------------
@@ -179,3 +176,8 @@ readLoop client onPacket = go emptyReadState
         case result of
             Nothing               -> S.sClose (clientSocket client)
             Just (packet, state') -> onPacket client packet >> go state'
+
+
+-- | Ignore All Exceptions (TM)
+ignoreExceptions :: SomeException -> IO ()
+ignoreExceptions _ = return ()
