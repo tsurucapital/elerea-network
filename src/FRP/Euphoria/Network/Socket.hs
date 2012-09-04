@@ -178,6 +178,7 @@ readLoop client onPacket = go emptyReadState
             Just (packet, state') -> onPacket client packet >> go state'
 
 
+--------------------------------------------------------------------------------
 -- | Ignore All Exceptions (TM)
 ignoreExceptions :: SomeException -> IO ()
 ignoreExceptions _ = return ()

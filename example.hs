@@ -21,15 +21,19 @@ server = do
     gen <- newStdGen
 
     sampler <- start $ do
-        r <- randomSignal gen
+        deltas <- randomSignal gen
 
         rec
-            clientsGen <- execute $
-                Network.server "0.0.0.0" 123456 (0 :: Int) out
-            clients <- delay [] =<< clientsGen
-            let out = (\cs d -> zip cs (repeat d)) <$> clients <*> r
+            let rsum = (+) <$> rsum' <*> deltas
+            rsum' <- delay 0 rsum
 
-        return out
+        rec
+            ssignals <- execute $
+                Network.server "0.0.0.0" 123456 (rsum :: Signal Int) out
+            clients <- delay [] . fmap Network.connectedClients =<< ssignals
+            let out = (\cs d -> zip cs (repeat d)) <$> clients <*> deltas
+
+        return $ (,) <$> rsum <*> out
 
     forever $ do
         x <- sampler

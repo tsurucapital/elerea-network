@@ -2,12 +2,14 @@
 {-# LANGUAGE DoRec #-}
 module FRP.Euphoria.Network
     ( client
+
+    , ServerSignals (..)
     , server
     ) where
 
 
 --------------------------------------------------------------------------------
-import           Control.Applicative         ((*>), (<$>), (<*>))
+import           Control.Applicative         ((<*), (<$>), (<*>))
 import           Control.Concurrent          (forkIO)
 import           Control.Monad               (forM, forM_, void)
 import           Data.IORef
@@ -46,24 +48,38 @@ client host port initialIn updateIn = do
 
 
 --------------------------------------------------------------------------------
+data ServerSignals = ServerSignals
+    { connectingClients    :: [Client]
+    , connectedClients     :: [Client]
+    , disconnectingClients :: [Client]
+    }
+
+
+--------------------------------------------------------------------------------
 server :: (Serialize os, Serialize od)
        => String
        -> Int
-       -> os
-       -> Signal [(Client, od)]
-       -> IO (SignalGen (Signal [Client]))
+       -> Signal os               -- Maybe this should be: Signal (Client -> os)
+       -> Signal [(Client, od)]   -- Maybe this should be: Signal (Client -> od)
+       -> IO (SignalGen (Signal ServerSignals))
 server host port initialOut deltasOut = do
-    s <- runServer host port onConnect onDisconnect onPacket
+    (connectsGen, putConnect) <- externalMulti
+    (disconnectsGen, putDisconnect) <- externalMulti
+    s <- runServer host port putConnect putDisconnect onPacket
     return $ do
-        out     <- effectful1 sendDeltasOut deltasOut
-        clients <- effectful $ serverGetClients s
-        return $ out *> clients
+        out         <- effectful1 sendDeltasOut deltasOut
+        clients     <- effectful $ serverGetClients s
+        connects    <- connectsGen
+        connects'   <- effectful2 sendInitialOut initialOut connects
+        disconnects <- disconnectsGen
+        return $ ServerSignals <$>
+            connects' <*> (clients <* out) <*> disconnects
   where
-    onConnect c = do
-        putStrLn $ show c ++ " connected"
-        clientSend c $ Packet AbsolutePacket (Serialize.encode initialOut)
-
-    onDisconnect c = putStrLn $ show c ++ " disconnected"
+    sendInitialOut io cs = do
+        putStrLn $ show cs ++ " connected"
+        forM_ cs $ \c ->
+            clientSend c $ Packet AbsolutePacket (Serialize.encode io)
+        return cs
 
     onPacket _ _ = return ()
 
