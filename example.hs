@@ -24,16 +24,13 @@ server = do
         deltas <- randomSignal gen
 
         rec
-            let rsum = (+) <$> rsum' <*> deltas
+            let rsum = (+) <$> rsum' <*> deltas :: Signal Int
             rsum' <- delay 0 rsum
 
-        rec
-            ssignals <- execute $
-                Network.server "0.0.0.0" 123456 (rsum :: Signal Int) out
-            clients <- delay [] . fmap Network.connectedClients =<< ssignals
-            let out = (\cs d -> zip cs (repeat d)) <$> clients <*> deltas
+        ssignals <- join $ execute $ Network.server "0.0.0.0" 123456
+            (fmap const rsum) (fmap const deltas)
 
-        return $ (,) <$> rsum <*> out
+        return $ (,) <$> rsum <*> ssignals
 
     forever $ do
         x <- sampler

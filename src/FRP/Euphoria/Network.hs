@@ -52,23 +52,23 @@ data ServerSignals = ServerSignals
     { connectingClients    :: [Client]
     , connectedClients     :: [Client]
     , disconnectingClients :: [Client]
-    }
+    } deriving (Show)
 
 
 --------------------------------------------------------------------------------
 server :: (Serialize os, Serialize od)
        => String
        -> Int
-       -> Signal os               -- Maybe this should be: Signal (Client -> os)
-       -> Signal [(Client, od)]   -- Maybe this should be: Signal (Client -> od)
+       -> Signal (Client -> os)
+       -> Signal (Client -> od)
        -> IO (SignalGen (Signal ServerSignals))
-server host port initialOut deltasOut = do
+server host port initialOut deltaOut = do
     (connectsGen, putConnect) <- externalMulti
     (disconnectsGen, putDisconnect) <- externalMulti
     s <- runServer host port putConnect putDisconnect onPacket
     return $ do
-        out         <- effectful1 sendDeltasOut deltasOut
         clients     <- effectful $ serverGetClients s
+        out         <- effectful2 sendDeltaOut deltaOut clients
         connects    <- connectsGen
         connects'   <- effectful2 sendInitialOut initialOut connects
         disconnects <- disconnectsGen
@@ -78,13 +78,13 @@ server host port initialOut deltasOut = do
     sendInitialOut io cs = do
         putStrLn $ show cs ++ " connected"
         forM_ cs $ \c ->
-            clientSend c $ Packet AbsolutePacket (Serialize.encode io)
+            clientSend c $ Packet AbsolutePacket $ Serialize.encode (io c)
         return cs
 
-    onPacket _ _ = return ()
+    sendDeltaOut d cs = forM_ cs $ \c ->
+        clientSend c $ Packet DeltaPacket $ Serialize.encode (d c)
 
-    sendDeltasOut ds = forM_ ds $ \(c, d) ->
-        clientSend c $ Packet DeltaPacket (Serialize.encode d)
+    onPacket _ _ = return ()
 
 
 --------------------------------------------------------------------------------
