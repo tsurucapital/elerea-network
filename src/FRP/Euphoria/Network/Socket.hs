@@ -5,6 +5,9 @@ module FRP.Euphoria.Network.Socket
     , clientDisconnect
     , clientSend
 
+    , Server
+    , serverGetClients
+
     , runServer
     , runClient
     ) where
@@ -12,12 +15,14 @@ module FRP.Euphoria.Network.Socket
 
 --------------------------------------------------------------------------------
 import qualified Blaze.ByteString.Builder       as Builder
+import           Control.Applicative            ((<$>), (<*>))
 import           Control.Concurrent             (forkIO)
 import           Control.Concurrent.MVar
 import           Control.Exception              (SomeException, handle)
-import           Control.Monad                  (forever)
+import           Control.Monad                  (forever, void)
 import qualified Data.Attoparsec                as A
 import qualified Data.ByteString                as B
+import           Data.IORef
 import           Data.Ord                       (comparing)
 import           Data.Set                       (Set)
 import qualified Data.Set                       as S
@@ -75,13 +80,6 @@ instance Show Client where
 
 
 --------------------------------------------------------------------------------
-data ServerState = ServerState
-    { serverNextClientId :: !Word64
-    , serverClients      :: Set Client
-    }
-
-
---------------------------------------------------------------------------------
 clientDisconnect :: Client -> IO ()
 clientDisconnect client = S.sClose (clientSocket client)
 
@@ -93,21 +91,35 @@ clientSend client packet = SBL.sendAll (clientSocket client) $
 
 
 --------------------------------------------------------------------------------
-emptyServerState :: ServerState
-emptyServerState = ServerState 0 S.empty
+data Server = Server
+    { serverNextClientId :: IORef Word64
+    , serverClients      :: MVar (Set Client)
+    }
 
 
 --------------------------------------------------------------------------------
-serverAddClient :: S.Socket -> ServerState -> (ServerState, Client)
-serverAddClient socket server =
-    let id' = serverNextClientId server
-    in (server {serverNextClientId = id' + 1}, Client id' socket)
+mkServer :: IO Server
+mkServer = Server <$> newIORef 0 <*> newMVar S.empty
 
 
 --------------------------------------------------------------------------------
-serverRemoveClient :: Client -> ServerState -> ServerState
-serverRemoveClient client s =
-    s {serverClients = S.delete client (serverClients s)}
+serverGetClients :: Server -> IO [Client]
+serverGetClients = fmap S.toList . readMVar . serverClients
+
+
+--------------------------------------------------------------------------------
+serverAddClient :: Server -> S.Socket -> IO Client
+serverAddClient server socket = do
+    id' <- atomicModifyIORef (serverNextClientId server) $ \i -> (i + 1, i)
+    let client = Client id' socket
+    modifyMVar_ (serverClients server) (return . S.insert client)
+    return client
+
+
+--------------------------------------------------------------------------------
+serverRemoveClient :: Server -> Client -> IO ()
+serverRemoveClient server client =
+    modifyMVar_ (serverClients server) $ return . S.delete client
 
 
 --------------------------------------------------------------------------------
@@ -117,23 +129,26 @@ runServer :: String                       -- ^ Host
           -> (Client -> IO ())            -- ^ Connect handler
           -> (Client -> IO ())            -- ^ Disconnect handler
           -> (Client -> Packet -> IO ())  -- ^ Packet handler
-          -> IO ()
+          -> IO Server
 runServer host port onConnect onDisconnect onPacket = do
-    state  <- newMVar emptyServerState
+    server <- mkServer
     socket <- S.socket S.AF_INET S.Stream S.defaultProtocol
     _      <- S.setSocketOption socket S.ReuseAddr 1
     host'  <- S.inet_addr host
     S.bindSocket socket $ S.SockAddrInet (fromIntegral port) host'
     S.listen socket 5
-    forever $ do
+
+    void $ forkIO $ forever $ do
         (conn, _) <- S.accept socket
         _         <- forkIO $ do
-            client <- modifyMVar state $ return . serverAddClient conn
+            client <- serverAddClient server conn
             onConnect client
             handle handler $ readLoop client onPacket
-            modifyMVar_ state $ return . serverRemoveClient client
+            serverRemoveClient server client
             onDisconnect client
         return ()
+
+    return server
   where
     -- Ignore All Exceptions (TM)
     handler :: SomeException -> IO ()
