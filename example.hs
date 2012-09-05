@@ -35,7 +35,7 @@ server = do
             rsum' <- delay [] rsum
 
         ssignals <- join $ execute $ Network.server "0.0.0.0" 123456
-            (fmap const rsum) (fmap const deltas)
+            () (\() () -> ()) (fmap const rsum) (fmap const $ fmap Just deltas)
 
         return $ (,) <$> rsum <*> ssignals
 
@@ -50,6 +50,7 @@ client :: IO ()
 client = do
     sampler <- start $
         join $ execute $ Network.client "127.0.0.1" 123456 ([] :: [Int]) update
+            (pure ()) (pure (Nothing :: Maybe ()))
     forever $ do
         x <- sampler
         putStrLn $ "Client generated sample: " ++ show x
