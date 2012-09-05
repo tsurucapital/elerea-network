@@ -2,14 +2,16 @@
 {-# LANGUAGE DoRec #-}
 module FRP.Elerea.Network
     ( client
+    , broadcastClient
 
     , ServerSignals (..)
     , server
+    , broadcastServer
     ) where
 
 
 --------------------------------------------------------------------------------
-import           Control.Applicative         ((<*), (<$>), (<*>))
+import           Control.Applicative         (pure, (<*), (<$>), (<*>))
 import           Control.Monad               (forM_)
 import           Data.List                   ((\\))
 import           Data.Map                    (Map)
@@ -59,6 +61,21 @@ client host port initialIn updateIn initialOut deltaOut = do
         out  <- effectful1 id $ send <*> ((,) <$> initialOut <*> deltaOut)
 
         return $ statesIn <* out
+
+
+--------------------------------------------------------------------------------
+broadcastClient
+    :: (Serialize is, Serialize id)
+    => String
+    -> Int
+    -> is
+    -> (id -> is -> is)
+    -> IO (SignalGen (Signal is))
+broadcastClient host port initialIn updateIn =
+    client host port initialIn updateIn initialOut deltaOut
+  where
+    initialOut = pure ()      :: Signal ()
+    deltaOut   = pure Nothing :: Signal (Maybe ())
 
 
 --------------------------------------------------------------------------------
@@ -120,6 +137,23 @@ server host port initialIn updateIn initialOut deltaOut = do
                 ]
         in foldr (\(c, p) -> M.update (Just . updateWithPacket updateIn p) c)
                 initialMap packets
+
+
+--------------------------------------------------------------------------------
+broadcastServer
+    :: (Serialize os, Serialize od)
+    => String
+    -> Int
+    -> Signal (Client -> os)
+    -> Signal (Client -> Maybe od)
+    -> IO (SignalGen (Signal ()))
+broadcastServer host port initialOut deltaOut =
+    fmap (fmap (pure () <*)) $
+    server host port initialIn updateIn initialOut deltaOut
+  where
+    initialIn = ()
+    updateIn  = \() () -> ()
+
 
 --------------------------------------------------------------------------------
 foldSignal :: (a -> b -> b) -> b -> Signal a -> SignalGen (Signal b)
