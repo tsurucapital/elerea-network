@@ -16,16 +16,23 @@ import qualified FRP.Euphoria.Network as Network
 
 
 --------------------------------------------------------------------------------
+update :: Int -> [Int] -> [Int]
+update d xs
+    | length xs > 5 = drop 1 xs ++ [d]
+    | otherwise     = xs ++ [d]
+
+
+--------------------------------------------------------------------------------
 server :: IO ()
 server = do
     gen <- newStdGen
 
     sampler <- start $ do
-        deltas <- randomSignal gen
+        deltas <- stateful 0 (+ 1)
 
         rec
-            let rsum = (+) <$> rsum' <*> deltas :: Signal Int
-            rsum' <- delay 0 rsum
+            let rsum = update <$> deltas <*> rsum'
+            rsum' <- delay [] rsum
 
         ssignals <- join $ execute $ Network.server "0.0.0.0" 123456
             (fmap const rsum) (fmap const deltas)
@@ -39,40 +46,14 @@ server = do
 
 
 --------------------------------------------------------------------------------
--- | The server generates random numbers between 0 and 10.
-randomSignal :: RandomGen g => g -> SignalGen (Signal Int)
-randomSignal gen = do
-    signal <- stateful (gen, 0) $ \(g, _) ->
-        let (x, g') = randomR (0, 10) g
-        in (g', x)
-
-    return $ fmap snd signal
-
-
---------------------------------------------------------------------------------
 client :: IO ()
 client = do
     sampler <- start $
-        join $ execute $ Network.client "127.0.0.1" 123456 (0 :: Int) (+)
+        join $ execute $ Network.client "127.0.0.1" 123456 ([] :: [Int]) update
     forever $ do
         x <- sampler
         putStrLn $ "Client generated sample: " ++ show x
         threadDelay $ 1000 * 1000
-
-
-{-
---------------------------------------------------------------------------------
--- | The client computes a weighted average
-average :: Signal Int -> SignalGen (Signal Double)
-average signal = do
-    rec
-        let averages = update <$> averages' <*> signal
-        averages' <- delay 0 averages
-
-    return averages
-  where
-    update w x = w * 0.9 + fromIntegral x * 0.1
--}
 
 
 --------------------------------------------------------------------------------
