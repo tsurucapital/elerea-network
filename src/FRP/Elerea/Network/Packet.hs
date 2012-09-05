@@ -1,6 +1,6 @@
 --------------------------------------------------------------------------------
 {-# LANGUAGE OverloadedStrings #-}
-module FRP.Euphoria.Network.Packet
+module FRP.Elerea.Network.Packet
     ( PacketType (..)
     , Packet (..)
     , parsePacket

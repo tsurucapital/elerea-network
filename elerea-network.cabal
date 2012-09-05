@@ -1,0 +1,40 @@
+Name:     elerea-network
+Version:  0.0.0.1
+Synopsis: Connect (FRP) networks over a (TCP) network
+
+Description:
+    Connect (FRP) networks over a (TCP) network
+
+License:       BSD3
+License-file:  LICENSE
+Author:        Jasper Van der Jeugt <m@jaspervdj.be>
+Maintainer:    Jasper Van der Jeugt <m@jaspervdj.be>
+Copyright:     2012 Tsuru Capital
+Category:      FRP
+Build-type:    Simple
+Cabal-version: >= 1.8
+
+Library
+  Ghc-options:    -Wall
+  Hs-source-dirs: src
+
+  Exposed-modules:
+    FRP.Elerea.Network
+
+  Other-modules:
+    FRP.Elerea.Network.Socket
+    FRP.Elerea.Network.Packet
+
+  Build-depends:
+    attoparsec    >= 0.10 && < 0.11,
+    base          >= 4    && < 5,
+    blaze-builder >= 0.3  && < 0.4,
+    bytestring    >= 0.9  && < 0.10,
+    cereal        >= 0.3  && < 0.4,
+    containers    >= 0.4  && < 0.5,
+    elerea        >= 2.7  && < 2.8,
+    network       >= 2.3  && < 2.4
+
+Source-repository head
+  Type:     git
+  Location: git://github.com/tsurucapital/elerea-network.git

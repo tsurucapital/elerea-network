@@ -1,6 +1,6 @@
 --------------------------------------------------------------------------------
 {-# LANGUAGE DoRec #-}
-module FRP.Euphoria.Network
+module FRP.Elerea.Network
     ( client
 
     , ServerSignals (..)
@@ -21,8 +21,8 @@ import           FRP.Elerea.Simple
 
 
 --------------------------------------------------------------------------------
-import           FRP.Euphoria.Network.Packet
-import           FRP.Euphoria.Network.Socket
+import           FRP.Elerea.Network.Packet
+import           FRP.Elerea.Network.Socket
 
 
 --------------------------------------------------------------------------------

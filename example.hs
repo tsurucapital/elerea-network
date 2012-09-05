@@ -12,7 +12,7 @@ import           System.Random
 
 --------------------------------------------------------------------------------
 import           FRP.Elerea.Simple
-import qualified FRP.Euphoria.Network as Network
+import qualified FRP.Elerea.Network as Network
 
 
 --------------------------------------------------------------------------------

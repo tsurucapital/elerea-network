@@ -1,6 +1,6 @@
 --------------------------------------------------------------------------------
 -- | Low-level socket stuff
-module FRP.Euphoria.Network.Socket
+module FRP.Elerea.Network.Socket
     ( Client
     , clientDisconnect
     , clientSend
@@ -33,7 +33,7 @@ import qualified Network.Socket.ByteString.Lazy as SBL
 
 
 --------------------------------------------------------------------------------
-import           FRP.Euphoria.Network.Packet
+import           FRP.Elerea.Network.Packet
 
 
 --------------------------------------------------------------------------------
