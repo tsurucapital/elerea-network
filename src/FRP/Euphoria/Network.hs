@@ -10,18 +10,13 @@ module FRP.Euphoria.Network
 
 --------------------------------------------------------------------------------
 import           Control.Applicative         ((<*), (<$>), (<*>))
-import           Control.Concurrent          (forkIO)
-import           Control.Monad               (forM, forM_, void)
-import           Data.IORef
+import           Control.Monad               (forM_)
 import           Data.List                   ((\\))
 import           Data.Map                    (Map)
 import qualified Data.Map                    as M
 import           Data.Maybe                  (fromMaybe)
 import           Data.Serialize              (Serialize)
-import           Data.Serialize              (Serialize)
 import qualified Data.Serialize              as Serialize
-import qualified Data.Serialize              as Serialize
-import           Data.Typeable               (Typeable)
 import           FRP.Elerea.Simple
 
 
@@ -32,15 +27,13 @@ import           FRP.Euphoria.Network.Socket
 
 --------------------------------------------------------------------------------
 sendAbsolute :: Serialize s => Client -> s -> IO ()
-sendAbsolute client s =
-    clientSend client $ Packet AbsolutePacket $ Serialize.encode s
+sendAbsolute c s = clientSend c $ Packet AbsolutePacket $ Serialize.encode s
 
 
 --------------------------------------------------------------------------------
 sendDelta :: Serialize d => Client -> Maybe d -> IO ()
-sendDelta _      Nothing  = return ()
-sendDelta client (Just d) =
-    clientSend client $ Packet DeltaPacket $ Serialize.encode d
+sendDelta _ Nothing  = return ()
+sendDelta c (Just d) = clientSend c $ Packet DeltaPacket $ Serialize.encode d
 
 
 --------------------------------------------------------------------------------
