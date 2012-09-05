@@ -13,6 +13,7 @@ import           Control.Applicative         ((<*), (<$>), (<*>))
 import           Control.Concurrent          (forkIO)
 import           Control.Monad               (forM, forM_, void)
 import           Data.IORef
+import           Data.List                   ((\\))
 import           Data.Map                    (Map)
 import qualified Data.Map                    as M
 import           Data.Serialize              (Serialize)
@@ -67,13 +68,20 @@ server host port initialOut deltaOut = do
     (disconnectsGen, putDisconnect) <- externalMulti
     s <- runServer host port putConnect putDisconnect onPacket
     return $ do
-        clients     <- effectful $ serverGetClients s
-        out         <- effectful2 sendDeltaOut deltaOut clients
-        connects    <- connectsGen
-        connects'   <- effectful2 sendInitialOut initialOut connects
+        -- List of connecting clients at this point: send the initial out
+        connects  <- connectsGen
+        connects' <- effectful2 sendInitialOut initialOut connects
+
+        -- List of already connected clients: send the delta
+        clients <- effectful $ serverGetClients s
+        let clients' = (\\) <$> clients <*> connects
+        out <- effectful2 sendDeltaOut deltaOut clients'
+
+        -- List of disconnecting clients
         disconnects <- disconnectsGen
+
         return $ ServerSignals <$>
-            connects' <*> (clients <* out) <*> disconnects
+            connects' <*> (clients' <* out) <*> disconnects
   where
     sendInitialOut io cs = do
         putStrLn $ show cs ++ " connected"
