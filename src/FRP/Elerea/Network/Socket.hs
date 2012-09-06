@@ -1,5 +1,6 @@
 --------------------------------------------------------------------------------
 -- | Low-level socket stuff
+{-# LANGUAGE DeriveDataTypeable #-}
 module FRP.Elerea.Network.Socket
     ( Client
     , clientDisconnect
@@ -16,9 +17,10 @@ module FRP.Elerea.Network.Socket
 --------------------------------------------------------------------------------
 import qualified Blaze.ByteString.Builder       as Builder
 import           Control.Applicative            ((<$>), (<*>))
-import           Control.Concurrent             (forkIO)
+import           Control.Concurrent             (forkIO, myThreadId)
 import           Control.Concurrent.MVar
-import           Control.Exception              (SomeException, handle)
+import           Control.Exception              (Exception, SomeException,
+                                                 handle, throwTo)
 import           Control.Monad                  (forever, void)
 import qualified Data.Attoparsec                as A
 import qualified Data.ByteString                as B
@@ -26,6 +28,7 @@ import           Data.IORef
 import           Data.Ord                       (comparing)
 import           Data.Set                       (Set)
 import qualified Data.Set                       as S
+import           Data.Typeable                  (Typeable)
 import           Data.Word                      (Word64)
 import qualified Network.Socket                 as S
 import qualified Network.Socket.ByteString      as SB
@@ -124,7 +127,6 @@ serverRemoveClient server client =
 
 
 --------------------------------------------------------------------------------
--- TODO: Fork not block
 runServer :: String                       -- ^ Host
           -> Int                          -- ^ Port
           -> (Client -> IO ())            -- ^ Connect handler
@@ -153,6 +155,17 @@ runServer host port onConnect onDisconnect onPacket = do
 
 
 --------------------------------------------------------------------------------
+data ElereaConnectionClosedException = ElereaConnectionClosedException
+    deriving (Show, Typeable)
+
+
+--------------------------------------------------------------------------------
+instance Exception ElereaConnectionClosedException
+
+
+--------------------------------------------------------------------------------
+-- | Start a client in the background. This thread will receive an exception if
+-- there is an unexpected disconnect.
 runClient :: String             -- ^ Host
           -> Int                -- ^ Port
           -> (Packet -> IO ())  -- ^ Packet handler
@@ -162,8 +175,14 @@ runClient host port onPacket = do
     host'  <- S.inet_addr host
     S.connect socket $ S.SockAddrInet (fromIntegral port) host'
 
-    let client = Client 0 socket
-    _ <- forkIO $ readLoop client (\_ packet -> onPacket packet)
+    myThread <- myThreadId
+    let client  = Client 0 socket
+        rethrow = throwTo myThread
+
+    _ <- forkIO $ handle rethrow $ do
+        readLoop client (\_ packet -> onPacket packet)
+        rethrow ElereaConnectionClosedException
+
     return client
 
 
